@@ -1,142 +1,133 @@
 import pandas as pd
 import numpy as np
+from pathlib import Path
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.metrics import mean_squared_error, r2_score
 import joblib
 import matplotlib.pyplot as plt
 
+# Carga y preparación de datos usando la hoja 'Divorcios Mes y Año'
 def load_and_prepare_data():
-    df = pd.read_excel('resumen_estadistico_divorcios_2013_2023.xlsx', 
-                      sheet_name='Datos por Departamento')    
-    X = df.drop(columns=['Total', 'Departamento'])
-    y = df['Total']
-    
-    return train_test_split(X, y, test_size=0.2, random_state=42)
+    script_dir = Path(__file__).resolve().parent
+    file_path = script_dir / "resumen_estadistico_divorcios_2013_2023.xlsx"
+    df = pd.read_excel(file_path, sheet_name="Divorcios Mes y Año")
 
+    # Convertir columnas útiles a numérico
+    df['Year'] = pd.to_numeric(df['Year'], errors='coerce')
+    df['Divorcios'] = pd.to_numeric(df['Divorcios'], errors='coerce')
+
+    # Mapear nombres de mes en español a valor numérico
+    month_map = {
+        'Enero': 1, 'Febrero': 2, 'Marzo': 3, 'Abril': 4,
+        'Mayo': 5, 'Junio': 6, 'Julio': 7, 'Agosto': 8,
+        'Septiembre': 9, 'Octubre': 10, 'Noviembre': 11, 'Diciembre': 12
+    }
+    df['Mes'] = df['Mes'].map(month_map)
+
+    # Eliminar filas incompletas
+    df = df.dropna(subset=['Year', 'Mes', 'Divorcios'])
+    df['Mes'] = df['Mes'].astype(int)
+
+    # Definir variables predictoras y objetivo
+    X = df[['Year', 'Mes']]
+    y = df['Divorcios']
+
+    # Split: 70% entrenamiento / 30% prueba
+    return train_test_split(X, y, test_size=0.3, random_state=42)
+
+# Entrenamiento y evaluación de modelos Random Forest
 def train_and_evaluate_models(X_train, X_test, y_train, y_test):
-    
-    #Modelo 1 base
-    rf_base = RandomForestRegressor(random_state=42, n_jobs=-1)
-    rf_base.fit(X_train, y_train)
-    
-    #Modelo 2 tuneo
-    rf_tuned = RandomForestRegressor(
+    results = {}
+
+    # Modelo base
+    model_base = RandomForestRegressor(random_state=42)
+    model_base.fit(X_train, y_train)
+    pred_base = model_base.predict(X_test)
+    results['Base'] = {
+        'rmse': np.sqrt(mean_squared_error(y_test, pred_base)),
+        'r2': r2_score(y_test, pred_base)
+    }
+
+    # Modelo tuneado manualmente
+    model_tuned = RandomForestRegressor(
         n_estimators=200,
         max_depth=15,
         min_samples_split=5,
-        min_samples_leaf=2,
-        max_features='sqrt',
-        random_state=42,
-        n_jobs=-1
+        min_samples_leaf=3,
+        random_state=42
     )
-    rf_tuned.fit(X_train, y_train)
-    
-    #Modelo 3 hiperparametros
+    model_tuned.fit(X_train, y_train)
+    pred_tuned = model_tuned.predict(X_test)
+    results['Tuned'] = {
+        'rmse': np.sqrt(mean_squared_error(y_test, pred_tuned)),
+        'r2': r2_score(y_test, pred_tuned)
+    }
+
+    # Búsqueda de hiperparámetros con GridSearchCV
     param_grid = {
         'n_estimators': [100, 200, 300],
-        'max_depth': [10, 15, 20, None],
-        'min_samples_split': [2, 5, 10],
-        'min_samples_leaf': [1, 2, 4],
-        'max_features': ['sqrt', 'log2']
+        'max_depth': [None, 10, 20],
+        'min_samples_split': [2, 5],
+        'min_samples_leaf': [1, 2, 4]
     }
-    
-    rf_grid = GridSearchCV(
-        estimator=RandomForestRegressor(random_state=42, n_jobs=-1),
-        param_grid=param_grid,
+    grid_search = GridSearchCV(
+        RandomForestRegressor(random_state=42),
+        param_grid,
         cv=5,
-        scoring='neg_mean_squared_error',
-        verbose=1,
         n_jobs=-1,
-        error_score='raise'
+        scoring='neg_mean_squared_error'
     )
-    rf_grid.fit(X_train, y_train)
-    
-    #modelo final
-    best_params = rf_grid.best_params_
-    rf_final = RandomForestRegressor(**best_params, random_state=42, n_jobs=-1)
-    rf_final.fit(X_train, y_train)
-    
-    #evaluacion
-    def evaluate_model(model, X, y_true):
-        y_pred = model.predict(X)
-        return {
-            'RMSE': np.sqrt(mean_squared_error(y_true, y_pred)),
-            'R2': r2_score(y_true, y_pred)
-        }
-    
-    return {
-        'models': {
-            'Base': rf_base,
-            'Tuneado': rf_tuned,
-            'Final': rf_final
-        },
-        'metrics': {
-            'Base': evaluate_model(rf_base, X_test, y_test),
-            'Tuneado': evaluate_model(rf_tuned, X_test, y_test),
-            'Final': evaluate_model(rf_final, X_test, y_test)
-        },
-        'best_params': best_params
+    grid_search.fit(X_train, y_train)
+    best_model = grid_search.best_estimator_
+    pred_best = best_model.predict(X_test)
+    results['GridSearch'] = {
+        'rmse': np.sqrt(mean_squared_error(y_test, pred_best)),
+        'r2': r2_score(y_test, pred_best)
     }
 
-def visualize_results(results, df):
-    
-    #ComparaciOn de modelos
+    return results, grid_search.best_params_, best_model
+
+# Visualización comparativa de resultados
+def visualize_results(results):
+    labels = list(results.keys())
+    rmses = [results[name]['rmse'] for name in labels]
+    r2s = [results[name]['r2'] for name in labels]
+
     fig, ax1 = plt.subplots(figsize=(10, 6))
-    
-    models = list(results['metrics'].keys())
-    rmse_values = [results['metrics'][m]['RMSE'] for m in models]
-    r2_values = [results['metrics'][m]['R2'] for m in models]
-    
-    bars = ax1.bar(models, rmse_values, color='lightcoral', alpha=0.7)
-    ax1.set_ylabel('RMSE', color='lightcoral')
-    ax1.tick_params(axis='y', labelcolor='lightcoral')
-    
+    ax1.bar(labels, rmses)
+    ax1.set_ylabel('RMSE')
+
     ax2 = ax1.twinx()
-    ax2.plot(models, r2_values, 'o-', color='teal', linewidth=2, markersize=8)
-    ax2.set_ylabel('R² Score', color='teal')
-    ax2.tick_params(axis='y', labelcolor='teal')
-    
-    # Añadir valores
-    for bar in bars:
-        height = bar.get_height()
-        ax1.text(bar.get_x() + bar.get_width()/2, height,
-                f'{height:.1f}', ha='center', va='bottom')
-    
-    for i, txt in enumerate(r2_values):
-        ax2.text(i, txt, f'{txt:.3f}', ha='center', va='bottom')
-    
-    plt.title('Comparación de Modelos')
+    ax2.plot(labels, r2s, marker='o')
+    ax2.set_ylabel('R²')
+
+    for i, v in enumerate(rmses):
+        ax1.text(i, v, f"{v:.2f}", ha='center', va='bottom')
+    for i, v in enumerate(r2s):
+        ax2.text(i, v, f"{v:.2f}", ha='center', va='bottom')
+
+    plt.title('Comparación de Modelos Random Forest')
     plt.tight_layout()
-    plt.savefig('comparacion_modelos.png', dpi=300)
+    plt.savefig(Path(__file__).resolve().parent / 'comparacion_rf_mes_anio.png', dpi=300)
     plt.show()
-    
 
+# Función principal
 def main():
-    """Función principal"""
-    # 1. Cargar datos
     X_train, X_test, y_train, y_test = load_and_prepare_data()
-    df = pd.read_excel('resumen_estadistico_divorcios_2013_2023.xlsx', 
-                      sheet_name='Datos por Departamento')
-    
-    # 2. Modelado
-    results = train_and_evaluate_models(X_train, X_test, y_train, y_test)
-    
-    # 3. Resultados
-    print("\n=== RESULTADOS ===")
-    for name, metrics in results['metrics'].items():
-        print(f"\nModelo {name}:")
-        print(f"RMSE: {metrics['RMSE']:.2f}")
-        print(f"R²: {metrics['R2']:.4f}")
-    
-    print("\nMejores parámetros encontrados:")
-    print(results['best_params'])
-    
-    # 4. Guardar modelo final
-    joblib.dump(results['models']['Final'], 'modelo_final_divorcios.pkl')
-    
-    # 5. Visualización
-    visualize_results(results, df)
+    results, best_params, best_model = train_and_evaluate_models(X_train, X_test, y_train, y_test)
 
-if __name__ == "__main__":
+    print("=== RESULTADOS ===")
+    for name, metrics in results.items():
+        print(f"Modelo {name}: RMSE = {metrics['rmse']:.2f}, R² = {metrics['r2']:.2f}")
+    print("Mejores parámetros:", best_params)
+
+    # Guardar el modelo final
+    joblib.dump(best_model, Path(__file__).resolve().parent / 'modelo_rf_mes_anio.pkl')
+    print("Modelo final guardado: modelo_rf_mes_anio.pkl")
+
+    # Mostrar gráfica comparativa
+    visualize_results(results)
+
+if __name__ == '__main__':
     main()
