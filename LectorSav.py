@@ -4,10 +4,13 @@ from pathlib import Path
 import unicodedata
 import matplotlib.pyplot as plt
 
+# Funciones auxiliares
+
 def normalize(text):
     """Quita tildes y convierte el texto a Title Case."""
     nfkd = unicodedata.normalize('NFKD', str(text))
     return ''.join(c for c in nfkd if not unicodedata.combining(c)).title()
+
 
 def compute_stats(series):
     s = pd.to_numeric(series, errors='coerce')
@@ -30,6 +33,7 @@ def compute_stats(series):
         '90th Percentile': s.quantile(0.90)
     })
 
+
 def get_column(df, desired):
     """Busca en df una columna cuyo nombre, en mayúsculas, sea igual a desired."""
     for col in df.columns:
@@ -37,52 +41,40 @@ def get_column(df, desired):
             return col
     return None
 
-# Directorio donde se encuentran este script (.py) y los archivos .sav
+
+# Directorio y archivos SAV
 script_dir = Path(__file__).resolve().parent
 sav_files = sorted(script_dir.glob("divorcios*.sav"))
 
+# Estructuras para almacenar
 all_rows, stats, month_summary, raw_frames = [], {}, [], []
 
+# Procesar cada año
 for file in sav_files:
     year = int(file.stem.replace("divorcios", ""))
     df = pd.read_spss(file)
     df['Year'] = year
 
-    # Detectar columnas clave de forma insensible a mayúsculas
+    # Columnas clave
     dept_col = next((c for c in df.columns if c.upper() == 'DEPOCU'), None)
     month_col = next((c for c in df.columns if c.upper() == 'MESOCU'), None)
-    
-    # Normalizar todas las columnas categóricas y unificar variantes
+
+    # Normalizar categóricas y unificar variantes
     for col in df.select_dtypes(include=['object', 'category']).columns:
-        # Si la columna es categórica, se agrega la categoría '' para evitar errores
         if isinstance(df[col].dtype, pd.CategoricalDtype):
             df[col] = df[col].cat.add_categories('')
-        
         df[col] = df[col].fillna('').astype(str).apply(normalize).str.strip()
-        
-        # Unificar variantes (ejemplo para "Mestizo/Ladino")
         df[col] = df[col].replace({
             "Mestizo / Ladino": "Mestizo/Ladino",
             "Mestizo - Ladino": "Mestizo/Ladino",
             "Mestizo, Ladino": "Mestizo/Ladino",
-            # Agrega aquí otros reemplazos según sea necesario
         })
-        
-        # Si la columna es categórica, actualizar las categorías para quitar las no usadas
         if isinstance(df[col].dtype, pd.CategoricalDtype):
             df[col] = df[col].cat.remove_unused_categories()
-    
-    # Crear columnas estándar a partir de las detectadas
-    if dept_col is not None:
-        df['Departamento'] = df[dept_col]
-    else:
-        df['Departamento'] = 'No especificado'
-    
-    if month_col is not None:
-        df['Mes'] = df[month_col]
-    else:
-        df['Mes'] = 'No especificado'
-    
+
+    # Crear columnas estándar
+    df['Departamento'] = df[dept_col] if dept_col is not None else 'No especificado'
+    df['Mes'] = df[month_col] if month_col is not None else 'No especificado'
     raw_frames.append(df)
 
     # Conteo por Departamento
@@ -100,11 +92,24 @@ for file in sav_files:
         'Total divorcios': mc.max() if not mc.empty else 0
     })
 
+# Datos concatenados
 df_all = pd.concat(all_rows, ignore_index=True)
 df_stats = pd.DataFrame(stats).T
 df_month = pd.DataFrame(month_summary).sort_values('Year')
 
-# Pivot: Tabla de datos por Departamento con años y Total
+# ----------------------
+# Añadido: Conteo de divorcios por Mes y Año
+df_all_raw = pd.concat(raw_frames, ignore_index=True)
+df_mes_year = (
+    df_all_raw
+    .groupby(['Year', 'Mes'], observed=False)
+    .size()
+    .reset_index(name='Divorcios')
+    .sort_values(['Year', 'Mes'])
+)
+# ----------------------
+
+# Pivot: Departamentos vs Años
 df_pivot = df_all.pivot_table(
     index='Departamento',
     columns='Year',
@@ -115,7 +120,7 @@ df_pivot = df_all.pivot_table(
 df_pivot['Total'] = df_pivot.sum(axis=1)
 df_pivot.reset_index(inplace=True)
 
-# Tablas de frecuencia para variables categóricas (excluyendo NACHOM y NACMUJ)
+# Frecuencias categóricas
 df_raw = pd.concat(raw_frames, ignore_index=True)
 freq_tables = {}
 for col in df_raw.select_dtypes(include=['object']).columns:
@@ -127,12 +132,13 @@ for col in df_raw.select_dtypes(include=['object']).columns:
         'Percent (%)': (vc / vc.sum() * 100).round(2)
     })
 
-# Exportar todo a un único Excel
+# Exportar Excel
 output = script_dir / "resumen_estadistico_divorcios_2013_2023.xlsx"
 with pd.ExcelWriter(output, engine='openpyxl', mode='w') as writer:
     df_pivot.to_excel(writer, sheet_name='Datos por Departamento', index=False)
     df_stats.to_excel(writer, sheet_name='Resumen Estadístico')
     df_month.to_excel(writer, sheet_name='Mes con más divorcios', index=False)
+    df_mes_year.to_excel(writer, sheet_name='Divorcios Mes y Año', index=False)
     for col, table in freq_tables.items():
         sheet_name = f"Freq_{col}"[:31]
         table.to_excel(writer, sheet_name=sheet_name, index=True)
@@ -243,4 +249,3 @@ if "EDADHOM" in df_all_raw.columns and "EDADMUJ" in df_all_raw.columns:
     print("Gráfica 'edad_por_sexo.png' generada.")
 else:
     print("No se encontraron las columnas de edad para hombres y/o mujeres. Verifica los nombres de las columnas.")
-
