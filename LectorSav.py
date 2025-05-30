@@ -3,6 +3,8 @@ import numpy as np
 from pathlib import Path
 import unicodedata
 import matplotlib.pyplot as plt
+from scipy.stats import chi2_contingency, pointbiserialr
+from sklearn.preprocessing import LabelEncoder
 
 # Funciones auxiliares
 
@@ -249,3 +251,164 @@ if "EDADHOM" in df_all_raw.columns and "EDADMUJ" in df_all_raw.columns:
     print("Gráfica 'edad_por_sexo.png' generada.")
 else:
     print("No se encontraron las columnas de edad para hombres y/o mujeres. Verifica los nombres de las columnas.")
+
+
+# OCUPACIONES
+
+if 'CIUOHOM' not in df.columns or 'CIUOMUJ' not in df.columns:
+    print("Error: No se encontraron las columnas CIUOHOM y/o CIUOMUJ en los datos")
+    exit()
+
+# Limpieza de ocupaciones
+df['Ocupacion_Hombre'] = df['CIUOHOM'].astype(str).apply(normalize).str.strip()
+df['Ocupacion_Mujer'] = df['CIUOMUJ'].astype(str).apply(normalize).str.strip()
+
+# Filtrar valores no válidos
+invalid_values = ['', 'No Especificado', 'Ignorado', 'No Aplica', 'Nan', 'None']
+df = df[~df['Ocupacion_Hombre'].isin(invalid_values) & ~df['Ocupacion_Mujer'].isin(invalid_values)]
+
+## 1. Frecuencia de ocupaciones en divorcios (Top 10)
+print("\n" + "="*80)
+print("FRECUENCIA DE OCUPACIONES EN DIVORCIOS (TOP 10)")
+print("="*80)
+
+# Para hombres
+top_ocup_hombres = df['Ocupacion_Hombre'].value_counts().head(10)
+print("\nOcupaciones más comunes en hombres divorciados:")
+print(top_ocup_hombres.to_string())
+
+# Para mujeres
+top_ocup_mujeres = df['Ocupacion_Mujer'].value_counts().head(10)
+print("\nOcupaciones más comunes en mujeres divorciadas:")
+print(top_ocup_mujeres.to_string())
+
+# Gráfico comparativo
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+fig.suptitle('Ocupaciones más comunes en divorcios')
+
+# Gráfico hombres
+ax1.barh(top_ocup_hombres.index, top_ocup_hombres.values, color='skyblue')
+ax1.set_title('Hombres')
+ax1.set_xlabel('Número de Divorcios')
+
+# Gráfico mujeres
+ax2.barh(top_ocup_mujeres.index, top_ocup_mujeres.values, color='lightcoral')
+ax2.set_title('Mujeres')
+ax2.set_xlabel('Número de Divorcios')
+
+plt.tight_layout()
+plt.show()
+
+## 2. Correlación entre ocupaciones de la pareja
+print("\n" + "="*80)
+print("CORRELACIÓN ENTRE OCUPACIONES DE LA PAREJA")
+print("="*80)
+
+# Codificar ocupaciones numéricamente para el análisis
+le = LabelEncoder()
+ocup_combinadas = pd.concat([df['Ocupacion_Hombre'], df['Ocupacion_Mujer']]).unique()
+le.fit(ocup_combinadas)
+
+df['Ocupacion_Hombre_Code'] = le.transform(df['Ocupacion_Hombre'])
+df['Ocupacion_Mujer_Code'] = le.transform(df['Ocupacion_Mujer'])
+
+# Calcular correlación
+corr, p_value = pointbiserialr(df['Ocupacion_Hombre_Code'], df['Ocupacion_Mujer_Code'])
+print(f"\nCorrelación entre ocupaciones de la pareja: {corr:.3f} (p-value: {p_value:.4f})")
+
+# Interpretación
+if p_value < 0.05:
+    print("Existe una correlación estadísticamente significativa entre las ocupaciones de los cónyuges.")
+    print("Las parejas tienden a tener ocupaciones similares." if corr > 0 else "Las parejas tienden a tener ocupaciones diferentes.")
+else:
+    print("No hay evidencia de correlación significativa entre las ocupaciones de los cónyuges.")
+
+# Gráfico de dispersión con regresión
+plt.figure(figsize=(10, 6))
+plt.scatter(df['Ocupacion_Hombre_Code'], df['Ocupacion_Mujer_Code'], alpha=0.3)
+
+# Añadir línea de regresión
+z = np.polyfit(df['Ocupacion_Hombre_Code'], df['Ocupacion_Mujer_Code'], 1)
+p = np.poly1d(z)
+plt.plot(df['Ocupacion_Hombre_Code'], p(df['Ocupacion_Hombre_Code']), "r--")
+
+plt.title('Relación entre Ocupaciones de la Pareja')
+plt.xlabel('Código Ocupación Hombre')
+plt.ylabel('Código Ocupación Mujer')
+plt.grid(True)
+plt.show()
+
+## 3. Combinaciones más frecuentes
+print("\n" + "="*80)
+print("COMBINACIONES DE OCUPACIONES MÁS FRECUENTES")
+print("="*80)
+
+# Crear variable combinada
+df['Combinacion_Ocupaciones'] = df['Ocupacion_Hombre'] + " + " + df['Ocupacion_Mujer']
+top_combinaciones = df['Combinacion_Ocupaciones'].value_counts().head(10)
+
+print("\nCombinaciones más frecuentes:")
+print(top_combinaciones.to_string())
+
+# Gráfico de combinaciones
+plt.figure(figsize=(12, 6))
+plt.barh(top_combinaciones.index, top_combinaciones.values, color='lightgreen')
+plt.title('Top 10 Combinaciones de Ocupaciones en Divorcios')
+plt.xlabel('Número de Divorcios')
+plt.gca().invert_yaxis()  # Mostrar el más frecuente arriba
+plt.grid(axis='x')
+plt.show()
+
+## 4. Análisis por sector ocupacional
+print("\n" + "="*80)
+print("DISTRIBUCIÓN POR SECTORES OCUPACIONALES")
+print("="*80)
+
+# Definición simplificada de sectores
+sectores = {
+    'Profesional': ['Ingeniero', 'Médico', 'Abogado', 'Arquitecto', 'Doctor', 'Licenciado'],
+    'Técnico': ['Técnico', 'Tecnólogo', 'Analista', 'Programador'],
+    'Administrativo': ['Administrativo', 'Secretario', 'Asistente', 'Oficinista'],
+    'Comercio': ['Comerciante', 'Vendedor', 'Cajero'],
+    'Servicios': ['Mesero', 'Cocinero', 'Chofer', 'Seguridad'],
+    'Otros': []
+}
+
+def asignar_sector(ocupacion):
+    ocupacion = ocupacion.lower()
+    for sector, palabras_clave in sectores.items():
+        if any(palabra.lower() in ocupacion for palabra in palabras_clave):
+            return sector
+    return 'Otros'
+
+df['Sector_Hombre'] = df['Ocupacion_Hombre'].apply(asignar_sector)
+df['Sector_Mujer'] = df['Ocupacion_Mujer'].apply(asignar_sector)
+
+# Tabla de contingencia
+contingency = pd.crosstab(df['Sector_Hombre'], df['Sector_Mujer'])
+print("\nTabla de contingencia de sectores:")
+print(contingency)
+
+# Prueba chi-cuadrado
+chi2, p, dof, expected = chi2_contingency(contingency)
+print(f"\nTest Chi-Cuadrado: chi2 = {chi2:.2f}, p-value = {p:.4f}")
+
+# Gráfico de calor manual
+fig, ax = plt.subplots(figsize=(10, 8))
+cax = ax.matshow(contingency, cmap='YlOrRd')
+
+# Añadir valores en las celdas
+for (i, j), val in np.ndenumerate(contingency):
+    ax.text(j, i, f'{val}', ha='center', va='center', color='black')
+
+# Configuración del gráfico
+ax.set_xticks(np.arange(len(contingency.columns)))
+ax.set_yticks(np.arange(len(contingency.index)))
+ax.set_xticklabels(contingency.columns, rotation=45)
+ax.set_yticklabels(contingency.index)
+ax.xaxis.set_ticks_position('bottom')
+plt.title('Combinaciones de Sectores Ocupacionales')
+plt.xlabel('Sector Mujer')
+plt.ylabel('Sector Hombre')
+plt.colorbar(cax, label='Número de Divorcios')
+plt.show()
